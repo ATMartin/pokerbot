@@ -1,0 +1,3 @@
+# We don't need to version control the upload package;
+# we can build it from source on demand.
+app.zip

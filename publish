@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# This can be either the simple name of the target
+# function or the fully-qualified ARN identifier.
+LAMBDA_FN_NAME="slackPlanningPokerBot"
+
+# no aws-cli? no automation!
+if [ ! command -v aws &>/dev/null ]; then
+  echo "You'll need the AWS CLI to get started."
+  echo "Easy instructions: https://github.com/aws/aws-cli."
+  exit 1
+fi
+
+# ensure AWS auth has been configured
+if [ ! -e "$HOME/.aws/credentials" ]; then
+  echo "It looks like your AWS CLI hasn't been set up yet."
+  echo "Run 'aws configure' before using this script."
+  exit 1
+fi
+
+echo "-- Starting Lambda update for $LAMBDA_FN_NAME... --"
+# kill the most recent zip if it's still around.
+if [ -f "app.zip" ]; then
+  echo "...removing last distribution..."
+  rm -f "app.zip"
+fi
+
+# build & ship our zip
+echo "...zipping up current files for update..."
+zip -X -j app src/*
+
+echo "...updating lambda function..."
+aws lambda update-function-code --function-name slackPlanningPokerBot --zip-file fileb://app.zip
+
+if [ $? -eq 0 ]; then
+  echo "-- Your function successfully updated! --"
+else
+  echo "!! Whoops - something went wrong! !!"
+fi
+
+# the most recent zip file will stick around locally, in case we need it for debugging.
