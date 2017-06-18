@@ -151,15 +151,20 @@ def lambda_handler(event, context):
 
         # reset the game by deleting the current channel's data
         del poker_data[post_data['team_id']][post_data['channel_id']]
+
+        # count votes and report on the results
         vote_set = set(votes.keys())
-        if len(vote_set) == 1:
-            message = Message('*Congratulations!*')
+        vote_count = len(vote_set)
+        if vote_count == 0:
+            return Message('*No one voted! Start a new round to try again.*').get_public_message()
+        elif vote_count == 1:
+            message = Message(':confetti_ball: *Wow!* :confetti_ball:')
             message.add_attachment('Everyone selected the same number.', 'good', VALID_VOTES.get(vote_set.pop()))
             return message.get_public_message()
         else:
-            message = Message('*No winner yet.* Discuss and continue voting.')
+            message = Message(':thinking_face: *The votes are in!* The floor is open to discuss your choices.')
             for vote in votes:
-                message.add_attachment(", ".join(votes[vote]), 'warning', VALID_VOTES[vote], True)
+                message.add_attachment(str(", ".join(votes[vote])), 'warning', VALID_VOTES[vote], True)
             return message.get_public_message()
 
     elif sub_command == 'help':
