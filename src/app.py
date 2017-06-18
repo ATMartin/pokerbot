@@ -75,7 +75,13 @@ def lambda_handler(event, context):
         if post_data['team_id'] not in poker_data.keys():
             poker_data[post_data['team_id']] = {}
         poker_data[post_data['team_id']][post_data['channel_id']] = {}
-        message = Message('*The poker planning game has started.*')
+
+        message_text = '*A new round of planning poker has begun!*'
+        if len(command_arguments) > 1:
+            subject_arg = command_arguments[1]
+            message_text += '\n*This round\'s subject: *' + str(subject_arg)
+
+        message = Message(message_text)
         message.add_attachment('Vote by typing */pokerbot vote <number>*.', None, COMPOSITE_IMAGE)
         return message.get_public_message()
 
@@ -159,7 +165,7 @@ def lambda_handler(event, context):
     elif sub_command == 'help':
         return Message('Pokerbot helps you play Agile/Scrum poker planning.\n\n' +
                               'Use the following commands:\n' +
-                              ' `/pokerbot deal`: start the game\n' +
+                              ' `/pokerbot deal [subject]`: start the game, with an optional subject. \n' +
                               ' `/pokerbot vote`: cast your vote: ' + str(sorted(VALID_VOTES.keys())) + '\n' +
                               ' `/pokerbot tally`: show who\'s voted so far. \n' +
                               ' `/pokerbot reveal`: unveil the votes and open the floor!').get_private_message()
