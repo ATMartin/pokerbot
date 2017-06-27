@@ -19,39 +19,20 @@ import urllib2
 
 # Start Configuration
 SLACK_TOKENS = os.environ['SLACK_TOKEN']
-IMAGE_LOCATION = os.environ['IMAGE_STORAGE']
-COMPOSITE_IMAGE = IMAGE_LOCATION + 'composite.png'
-VALID_VOTES = {
-    0 : IMAGE_LOCATION + '0.png',
-    1 : IMAGE_LOCATION + '1.png',
-    2 : IMAGE_LOCATION + '2.png',
-    3 : IMAGE_LOCATION + '3.png',
-    5 : IMAGE_LOCATION + '5.png',
-    8 : IMAGE_LOCATION + '8.png',
-    13 : IMAGE_LOCATION + '13.png',
-    20 : IMAGE_LOCATION + '20.png',
-    40 : IMAGE_LOCATION + '40.png',
-    100 : IMAGE_LOCATION + '100.png'
-}
 # End Configuration
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 poker_data = {}
 
-def lambda_handler(event, context):
-    """Main Lambda handler
-    The function that AWS Lambda is configured to run on POST request to the
-    configuration path. This function handles the main functions of the Pokerbot
-    including starting the game, voting, calculating and ending the game.
-    """
-    req_body = event['body']
-    params = parse_qs(req_body)
-
-    token = params['token'][0]
+def authenticate(token):
     if token not in SLACK_TOKENS:
         logger.error("Request token (%s) does not match expected.", token)
         raise Exception("Invalid request token")
+
+def process_slash_request(params):
+    token = params['token'][0]
+    authenticate(token)
 
     post_data = {
         'team_id' : params['team_id'][0],
@@ -75,6 +56,7 @@ def lambda_handler(event, context):
         if post_data['team_id'] not in poker_data.keys():
             poker_data[post_data['team_id']] = {}
         poker_data[post_data['team_id']][post_data['channel_id']] = {}
+        poker_data[post_data['team_id']]['response_url'] = post_data['response_url']
 
         message_text = '*A new round of planning poker has begun!*'
         if len(command_arguments) > 1:
@@ -82,37 +64,14 @@ def lambda_handler(event, context):
             message_text += '\n*This round\'s subject: *' + str(subject_arg)
 
         message = Message(message_text)
-        message.add_attachment('Vote by typing */pokerbot vote <number>*.', None, COMPOSITE_IMAGE)
+        attachment = Attachment('Place your vote using the buttons below. <http://lab.gracehill.com/snippets/59|(details)>', None)
+        attachment.add_action_button(AttachmentAction('vote', '1', '1', 'primary'))
+        attachment.add_action_button(AttachmentAction('vote', '3', '3'))
+        attachment.add_action_button(AttachmentAction('vote', '5', '5'))
+        attachment.add_action_button(AttachmentAction('vote', '8', '8'))
+        attachment.add_action_button(AttachmentAction('vote', '13', '13', 'danger'))
+        message.add_attachment(attachment)
         return message.get_public_message()
-
-    elif sub_command == 'vote':
-        if (post_data['team_id'] not in poker_data.keys() or
-                post_data['channel_id'] not in poker_data[post_data['team_id']].keys()):
-            return Message("The poker planning game hasn't started yet.").get_private_message()
-        if len(command_arguments) < 2:
-            return Message("Your vote was not counted. You didn't enter a number.").get_private_message()
-        vote_sub_command = command_arguments[1]
-        vote = None
-        try:
-            vote = int(vote_sub_command)
-        except ValueError:
-            return Message("Your vote was not counted. Please enter a number.").get_private_message()
-
-        if vote not in VALID_VOTES:
-            return Message("Your vote was not counted. Please enter a valid poker planning number.").get_private_message()
-
-        already_voted = poker_data[post_data['team_id']][post_data['channel_id']].has_key(post_data['user_id'])
-        poker_data[post_data['team_id']][post_data['channel_id']][post_data['user_id']] = {
-            'vote' : vote,
-            'name' : post_data['user_name']
-        }
-
-        if already_voted:
-            return Message("You changed your vote to *%d*." % (vote)).get_private_message()
-        else:
-            message = Message('%s voted' % (post_data['user_name']))
-            send_delayed_message(post_data['response_url'], message)
-            return Message("You voted *%d*." % (vote)).get_private_message()
 
     elif sub_command == 'tally':
         if (post_data['team_id'] not in poker_data.keys() or
@@ -142,6 +101,7 @@ def lambda_handler(event, context):
 
         votes = {}
 
+        print poker_data[post_data['team_id']][post_data['channel_id']]
         for player in poker_data[post_data['team_id']][post_data['channel_id']]:
             player_vote = poker_data[post_data['team_id']][post_data['channel_id']][player]['vote']
             player_name = poker_data[post_data['team_id']][post_data['channel_id']][player]['name']
@@ -159,23 +119,73 @@ def lambda_handler(event, context):
             return Message('*No one voted! Start a new round to try again.*').get_public_message()
         elif vote_count == 1:
             message = Message(':confetti_ball: *Wow!* :confetti_ball:')
-            message.add_attachment('Everyone selected the same number.', 'good', VALID_VOTES.get(vote_set.pop()))
+            success_message = 'Everyone selected the same number: *' + str(vote_set.pop()) + '*'
+            message.add_attachment(Attachment(success_message, 'good'))
             return message.get_public_message()
         else:
             message = Message(':thinking_face: *The votes are in!* The floor is open to discuss your choices.')
             for vote in votes:
-                message.add_attachment(str(", ".join(votes[vote])), 'warning', VALID_VOTES[vote], True)
+                message.add_attachment(Attachment("*" + str(vote) + "* - " + str(", ".join(votes[vote])), 'warning'))
             return message.get_public_message()
 
     elif sub_command == 'help':
         return Message('Pokerbot helps you play Agile/Scrum poker planning.\n\n' +
                               'Use the following commands:\n' +
                               ' `/pokerbot deal [subject]`: start the game, with an optional subject. \n' +
-                              ' `/pokerbot vote`: cast your vote: ' + str(sorted(VALID_VOTES.keys())) + '\n' +
                               ' `/pokerbot tally`: show who\'s voted so far. \n' +
                               ' `/pokerbot reveal`: unveil the votes and open the floor!').get_private_message()
     else:
         return Message('Invalid command. Type */pokerbot help* for pokerbot commands.').get_private_message()
+
+def process_interactive_request(params):
+    params = json.loads(params['payload'][0])
+    print params.__class__.__name__
+    token = params['token']
+    authenticate(token)
+
+    post_data = {
+        'team_id' : params['team']['id'],
+        'team_domain' : params['team']['domain'],
+        'channel_id' : params['channel']['id'],
+        'channel_name' : params['channel']['name'],
+        'user_id' : params['user']['id'],
+        'user_name' : params['user']['name'],
+        'vote_value' : params['actions'][0]['value'],
+        'response_url' : params['response_url']
+    }
+
+    if (post_data['team_id'] not in poker_data.keys() or
+            post_data['channel_id'] not in poker_data[post_data['team_id']].keys()):
+        return Message("The poker planning game hasn't started yet.").get_private_message()
+
+    vote = int(post_data['vote_value'])
+
+    already_voted = poker_data[post_data['team_id']][post_data['channel_id']].has_key(post_data['user_id'])
+    poker_data[post_data['team_id']][post_data['channel_id']][post_data['user_id']] = {
+        'vote' : vote,
+        'name' : post_data['user_name']
+    }
+
+    if already_voted:
+        return Message("You changed your vote to *%d*." % (vote)).get_private_message()
+    else:
+        message = Message('%s voted' % (post_data['user_name']))
+        send_delayed_message(poker_data[post_data['team_id']]['response_url'], message)
+        return Message("You voted *%d*." % (vote)).get_private_message()
+
+def lambda_handler(event, context):
+    """Main Lambda handler
+    The function that AWS Lambda is configured to run on POST request to the
+    configuration path. This function handles the main functions of the Pokerbot
+    including starting the game, voting, calculating and ending the game.
+    """
+    req_body = event['body']
+    params = parse_qs(req_body)
+
+    if params.has_key('token'):
+        return process_slash_request(params)
+    else:
+        return process_interactive_request(params)
 
 def send_delayed_message(url, message):
     """Send a delayed in_channel message.
@@ -188,6 +198,36 @@ def send_delayed_message(url, message):
     except urllib2.URLError:
         logger.error("Could not send delayed message to %s", url)
 
+class Attachment():
+    def __init__(self, text, color=None):
+        self.__attachment = {}
+        self.__attachment['text'] = text
+        self.__attachment['callback_id'] = 'pokerbot_attachments'
+        self.__attachment['mrkdwn_in'] = ['text']
+        if color != None:
+            self.__attachment['color'] = color
+
+    def add_action_button(self, action):
+        if not self.__attachment.has_key('actions'):
+            self.__attachment['actions'] = []
+        self.__attachment['actions'].append(action.build())
+
+    def build(self):
+        return self.__attachment
+
+class AttachmentAction():
+    def __init__(self, name, text, value, style=None):
+        self.__action = {}
+        self.__action['name'] = name
+        self.__action['text'] = text
+        self.__action['value'] = value
+        self.__action['type'] = 'button'
+        if style != None:
+            self.__action['style'] = style
+
+    def build(self):
+        return self.__action
+
 class Message():
     """Public Slack message
     see 'Slack message formatting <https://api.slack.com/docs/formatting>'
@@ -199,25 +239,15 @@ class Message():
         """
         self.__message = {}
         self.__message['text'] = text
+        self.__message['replace_original'] = False
 
-    def add_attachment(self, text, color=None, image=None, thumbnail=False):
+    def add_attachment(self, attachment):
         """Add attachment to Slack message.
-        :param text: text in the attachment
-        :param image: image in the attachment
-        :param thumbnail: image will be thubmanail if True, full size if False
         """
         if not self.__message.has_key('attachments'):
             self.__message['attachments'] = []
-        attachment = {}
-        attachment['text'] = text
-        if color != None:
-            attachment['color'] = color
-        if image != None:
-            if thumbnail:
-                attachment['thumb_url'] = image
-            else:
-                attachment['image_url'] = image
-        self.__message['attachments'].append(attachment)
+
+        self.__message['attachments'].append(attachment.build())
 
     def _wrap_message(self):
         """Formats the output.
@@ -243,4 +273,5 @@ class Message():
         """Send an ephemeral ("your eyes only") message to Slack
         :returns: a formatted message payload for Slack
         """
+        self.__message['response_type'] = 'ephemeral'
         return self._wrap_message()
