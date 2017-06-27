@@ -184,7 +184,7 @@ def send_delayed_message(url, message):
     req = urllib2.Request(url)
     req.add_header('Content-Type', 'application/json')
     try:
-        response = urllib2.urlopen(req, json.dumps(message.get_public_message()))
+        response = urllib2.urlopen(req, json.dumps(message.get_unwrapped_message()))
     except urllib2.URLError:
         logger.error("Could not send delayed message to %s", url)
 
@@ -228,6 +228,9 @@ class Message():
         self.wrapper['headers'] = {}
         self.wrapper['body'] = str(self.__message)
         return self.wrapper
+
+    def get_unwrapped_message(self):
+        return self.__message
 
     def get_public_message(self):
         """Send a publicly-viewable message to Slack
