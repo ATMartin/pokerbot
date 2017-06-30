@@ -23,7 +23,7 @@ SLACK_TOKENS = os.environ['SLACK_TOKEN']
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-poker_data = {}
+client = boto3.client('sdb')
 
 def authenticate(token):
     if token not in SLACK_TOKENS:
@@ -53,10 +53,18 @@ def process_slash_request(params):
     sub_command = command_arguments[0]
 
     if sub_command == 'deal':
-        if post_data['team_id'] not in poker_data.keys():
-            poker_data[post_data['team_id']] = {}
-        poker_data[post_data['team_id']][post_data['channel_id']] = {}
-        poker_data[post_data['team_id']]['response_url'] = post_data['response_url']
+        current_game = client.get_attributes(DomainName='pokerbot_game', ItemName='meta')
+        if 'Attributes' in current_game.keys():
+            message_text = 'Whoops! A game is already in progress.\n'
+            message_text += 'Use "/pokerbot reveal" to reveal votes & close the current game.\n'
+            message_text += 'Use "/pokerbot reset" to delete all data and start fresh.'
+            return Message(message_text).get_private_message()
+
+        client.put_attributes(DomainName='pokerbot_game', ItemName='meta', Attributes=[
+            { 'Name': 'team_id', 'Value': post_data['team_id'], 'Replace': True },
+            { 'Name': 'channel_id', 'Value': post_data['channel_id'], 'Replace': True },
+            { 'Name': 'response_url', 'Value': post_data['response_url'], 'Replace': True }
+        ])
 
         message_text = '*A new round of planning poker has begun!*'
         if len(command_arguments) > 1:
@@ -74,50 +82,42 @@ def process_slash_request(params):
         return message.get_public_message()
 
     elif sub_command == 'tally':
-        if (post_data['team_id'] not in poker_data.keys() or
-                post_data['channel_id'] not in poker_data[post_data['team_id']].keys()):
-
+        current_game = client.get_attributes(DomainName='pokerbot_game', ItemName='meta')
+        if 'Attributes' not in current_game.keys():
             return Message("The poker planning game hasn't started yet.").get_private_message()
 
-        message = None
-        names = []
+        vote_data = client.select(SelectExpression='select * from pokerbot_game where NOT itemName()="meta"')
+        if 'Items' not in vote_data.keys():
+            return Message('*No one has voted yet.*').get_public_message()
 
-        for player in poker_data[post_data['team_id']][post_data['channel_id']]:
-            names.append(poker_data[post_data['team_id']][post_data['channel_id']][player]['name'])
-
-        if len(names) == 0:
-            message = Message('No one has voted yet.')
-        else:
-            name_string = ""
-            for name in sorted(names):
-                name_string += '- ' + name + '\n'
-            message = Message('Votes so far:\n' + str(name_string))
-        return message.get_public_message()
+        names = [vote['Name'] for vote in vote_data['Items']]
+        name_string = ""
+        for name in sorted(names):
+            name_string += '- ' + name + '\n'
+        return Message('Votes so far:\n' + str(name_string)).get_public_message()
 
     elif sub_command == 'reveal':
-        if (post_data['team_id'] not in poker_data.keys() or
-                post_data['channel_id'] not in poker_data[post_data['team_id']].keys()):
+        current_game = client.get_attributes(DomainName='pokerbot_game', ItemName='meta')
+        if 'Attributes' not in current_game.keys():
             return Message("The poker planning game hasn't started yet.").get_private_message()
 
+        vote_data = client.select(SelectExpression='select * from pokerbot_game where NOT itemName()="meta"')
+        reset_game_data()
+
+        if 'Items' not in vote_data.keys():
+            return Message('*No one voted! Start a new round to try again.*').get_public_message()
+
         votes = {}
-
-        print poker_data[post_data['team_id']][post_data['channel_id']]
-        for player in poker_data[post_data['team_id']][post_data['channel_id']]:
-            player_vote = poker_data[post_data['team_id']][post_data['channel_id']][player]['vote']
-            player_name = poker_data[post_data['team_id']][post_data['channel_id']][player]['name']
-            if not votes.has_key(player_vote):
-                votes[player_vote] = []
-            votes[player_vote].append(player_name)
-
-        # reset the game by deleting the current channel's data
-        del poker_data[post_data['team_id']][post_data['channel_id']]
+        for vote in vote_data['Items']:
+            vote_value = vote['Attributes'][0]['Value']
+            if not votes.has_key(vote_value):
+                votes[vote_value] = []
+            votes[vote_value].append(vote['Name'])
 
         # count votes and report on the results
         vote_set = set(votes.keys())
         vote_count = len(vote_set)
-        if vote_count == 0:
-            return Message('*No one voted! Start a new round to try again.*').get_public_message()
-        elif vote_count == 1:
+        if vote_count == 1:
             message = Message(':confetti_ball: *Wow!* :confetti_ball:')
             success_message = 'Everyone selected the same number: *' + str(vote_set.pop()) + '*'
             message.add_attachment(Attachment(success_message, 'good'))
@@ -127,6 +127,11 @@ def process_slash_request(params):
             for vote in votes:
                 message.add_attachment(Attachment("*" + str(vote) + "* - " + str(", ".join(votes[vote])), 'warning'))
             return message.get_public_message()
+
+    elif sub_command == 'reset':
+        reset_game_data()
+        message_text = "Data cleared by %s. Use '/pokerbot deal' to start a new round." % str(post_data['user_name'])
+        return Message(message_text).get_public_message()
 
     elif sub_command == 'help':
         return Message('Pokerbot helps you play Agile/Scrum poker planning.\n\n' +
@@ -139,7 +144,6 @@ def process_slash_request(params):
 
 def process_interactive_request(params):
     params = json.loads(params['payload'][0])
-    print params.__class__.__name__
     token = params['token']
     authenticate(token)
 
@@ -154,24 +158,36 @@ def process_interactive_request(params):
         'response_url' : params['response_url']
     }
 
-    if (post_data['team_id'] not in poker_data.keys() or
-            post_data['channel_id'] not in poker_data[post_data['team_id']].keys()):
+    current_game = client.get_attributes(DomainName='pokerbot_game', ItemName='meta')
+    if 'Attributes' not in current_game.keys():
         return Message("The poker planning game hasn't started yet.").get_private_message()
 
-    vote = int(post_data['vote_value'])
+    vote_value = post_data['vote_value']
+    user_name = post_data['user_name']
 
-    already_voted = poker_data[post_data['team_id']][post_data['channel_id']].has_key(post_data['user_id'])
-    poker_data[post_data['team_id']][post_data['channel_id']][post_data['user_id']] = {
-        'vote' : vote,
-        'name' : post_data['user_name']
-    }
+    vote_data = client.select(SelectExpression='select * from pokerbot_game where NOT itemName()="meta"')
+    if vote_data.has_key('Items'):
+        already_voted = user_name in [vote['Name'] for vote in vote_data['Items']]
+    else:
+        already_voted = False
+
+    client.put_attributes(DomainName='pokerbot_game', ItemName=user_name, Attributes=[{
+        'Name': 'vote',
+        'Value': vote_value,
+        'Replace': True
+    }])
 
     if already_voted:
-        return Message("You changed your vote to *%d*." % (vote)).get_private_message()
+        return Message("You changed your vote to *%s*." % str(vote_value)).get_private_message()
     else:
-        message = Message('%s voted' % (post_data['user_name']))
-        send_delayed_message(poker_data[post_data['team_id']]['response_url'], message)
-        return Message("You voted *%d*." % (vote)).get_private_message()
+        message = Message('%s voted' % (user_name))
+        response_url = [pair for pair in current_game['Attributes'] if pair['Name'] == 'response_url'][0]['Value']
+        send_delayed_message(response_url, message)
+        return Message("You voted *%s*." % str(vote_value)).get_private_message()
+
+def reset_game_data():
+    active_data = client.select(SelectExpression='select * from pokerbot_game')
+    client.batch_delete_attributes(DomainName='pokerbot_game', Items=active_data['Items'])
 
 def lambda_handler(event, context):
     """Main Lambda handler
