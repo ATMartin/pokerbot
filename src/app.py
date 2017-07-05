@@ -68,8 +68,8 @@ def process_slash_request(params):
 
         message_text = '*A new round of planning poker has begun!*'
         if len(command_arguments) > 1:
-            subject_arg = command_arguments[1]
-            message_text += '\n*This round\'s subject: *' + str(subject_arg)
+            subject_arg = " ".join(command_arguments[1:])
+            message_text += '\n*This round\'s subject:* ' + str(subject_arg)
 
         message = Message(message_text)
         attachment = Attachment('Place your vote using the buttons below. <http://lab.gracehill.com/snippets/59|(details)>', None)
@@ -187,7 +187,8 @@ def process_interactive_request(params):
 
 def reset_game_data():
     active_data = client.select(SelectExpression='select * from pokerbot_game')
-    client.batch_delete_attributes(DomainName='pokerbot_game', Items=active_data['Items'])
+    if active_data.has_key('Items'):
+        client.batch_delete_attributes(DomainName='pokerbot_game', Items=active_data['Items'])
 
 def lambda_handler(event, context):
     """Main Lambda handler
